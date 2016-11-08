@@ -11,9 +11,9 @@ import com.willen.filedownload.FileDownloadManager;
 
 import java.io.File;
 
-import static android.content.ContentValues.TAG;
-
 public class MainActivity extends AppCompatActivity {
+    private final String TAG = "MainActivity";
+
     FileDownloadManager downloadManager = new FileDownloadManager();
 
     @Override
