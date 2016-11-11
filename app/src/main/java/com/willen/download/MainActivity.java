@@ -54,12 +54,12 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void error(DownloadInfo downloadInfo) {
-            Log.i(TAG, String.format("error %d/%d %d", downloadInfo.soFarBytes, downloadInfo.totalBytes,downloadInfo.status));
+            Log.i(TAG, String.format("error %d/%d %d %s", downloadInfo.soFarBytes, downloadInfo.totalBytes,downloadInfo.status,downloadInfo.reason));
         }
 
         @Override
         public void pause(DownloadInfo downloadInfo) {
-            Log.i(TAG, String.format("pause %d/%d %d", downloadInfo.soFarBytes, downloadInfo.totalBytes,downloadInfo.status));
+            Log.i(TAG, String.format("pause %d/%d %d %s", downloadInfo.soFarBytes, downloadInfo.totalBytes,downloadInfo.status,downloadInfo.reason));
         }
 
         @Override

@@ -10,10 +10,10 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import java.io.File;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Created by willenwu on 2016/11/2.
@@ -21,11 +21,15 @@ import java.util.Map;
 
 public class FileDownloadManager {
     private static final String TAG = "FileDownloadManager";
-    private DownloadChangeObserver downloadObserver;
     private static final Uri CONTENT_URI = Uri.parse("content://downloads/my_downloads");
+
+    private DownloadChangeObserver downloadObserver;
     private DownloadManager downloadManager;
-    private Map<Long, List<DownloadListener>> mListeners = new HashMap<>();
-    private Map<String, Long> mUrlMap = new HashMap<>();
+
+    private Map<Long, List<DownloadListener>> mListeners = new ConcurrentHashMap<>();
+    private Map<String, Long> mUrl2Id = new ConcurrentHashMap<>();
+    private Map<Long, DownloadInfo> mId2DownloadInfo = new ConcurrentHashMap<>();
+
     private int soFarIdx = -1, totalIdx, statusIdx, urlIdx, pathIdx, reasonIdx;
 
     public long startDownload(DownloadInfo downloadInfo, DownloadListener listener) {
@@ -39,7 +43,7 @@ public class FileDownloadManager {
         }
         if (isDownLoading(downloadInfo.url) && !downloadInfo.forceDownload) {
             Log.w(TAG, "The given url is downloading!");
-            return mUrlMap.get(downloadInfo.url);
+            return mUrl2Id.get(downloadInfo.url);
         }
         FileUtil.mkParentDir(downloadInfo.path);
         if (FileUtil.fileExists(downloadInfo.path)){
@@ -50,8 +54,9 @@ public class FileDownloadManager {
             request.setDestinationUri(Uri.fromFile(new File(downloadInfo.path)));
             request.setNotificationVisibility(downloadInfo.notificationVisibility);
             long downloadId = downloadManager.enqueue(request);
+            addUrl2IdMap(downloadInfo.url, downloadId);
+            addId2DownloadInfoMap(downloadId,downloadInfo);
             addCallbackListener(downloadId, listener);
-            addUrl(downloadInfo.url, downloadId);
             return downloadId;
         }catch (IllegalArgumentException e){
             Log.e(TAG,e.getMessage());
@@ -88,7 +93,7 @@ public class FileDownloadManager {
             Log.i(TAG, "downloadManager is null, you should init first!");
             return null;
         }
-        DownloadInfo downloadInfo = new DownloadInfo();
+        DownloadInfo downloadInfo = mId2DownloadInfo.containsKey(downloadId) ? mId2DownloadInfo.get(downloadId) :  new DownloadInfo();
         downloadInfo.id = downloadId;
         DownloadManager.Query query = new DownloadManager.Query().setFilterById(downloadId);
         Cursor c = null;
@@ -116,53 +121,51 @@ public class FileDownloadManager {
     }
 
     public void addCallbackListener(Long id, DownloadListener listener) {
-        synchronized (this) {
-            if (!mListeners.containsKey(id)) {
-                mListeners.put(id, new LinkedList<DownloadListener>());
-            }
-            mListeners.get(id).add(listener);
+        if (!mListeners.containsKey(id)) {
+            mListeners.put(id, new LinkedList<DownloadListener>());
         }
+        mListeners.get(id).add(listener);
     }
 
     public void removeCallbackListener(Long id, DownloadListener listener) {
-        synchronized (this) {
-            if (!mListeners.containsKey(id)) {
-                return;
-            }
-            mListeners.get(id).remove(listener);
+        if (!mListeners.containsKey(id)) {
+            return;
         }
+        mListeners.get(id).remove(listener);
     }
 
     public void removeCallbackListener(Long id) {
-        synchronized (this) {
-            if (!mListeners.containsKey(id)) {
-                return;
-            }
-            mListeners.remove(id);
+        if (!mListeners.containsKey(id)) {
+            return;
         }
+        mListeners.remove(id);
     }
 
-    public void addUrl(String url, Long id) {
-        synchronized (this) {
-            if (!mUrlMap.containsKey(url)) {
-                mUrlMap.put(url, id);
-            }
-        }
+    public void addUrl2IdMap(String url, Long id) {
+        mUrl2Id.put(url, id);
     }
 
     public void removeUrl(String url) {
-        synchronized (this) {
-            if (mUrlMap.containsKey(url)) {
-                mUrlMap.remove(url);
-            }
+        if (mUrl2Id.containsKey(url)) {
+            mUrl2Id.remove(url);
+        }
+    }
+
+    public void addId2DownloadInfoMap(Long id, DownloadInfo info) {
+        mId2DownloadInfo.put(id, info);
+    }
+
+    public void removeId(long id) {
+        if (mId2DownloadInfo.containsKey(id)) {
+            mId2DownloadInfo.remove(id);
         }
     }
 
     public boolean isDownLoading(String url) {
-        if (!mUrlMap.containsKey(url)) {
+        if (!mUrl2Id.containsKey(url)) {
             return false;
         }
-        Long id = mUrlMap.get(url);
+        Long id = mUrl2Id.get(url);
         if (id == null) {
             return false;
         }
@@ -171,7 +174,9 @@ public class FileDownloadManager {
             return false;
         }
         if (info.status == DownloadManager.STATUS_FAILED || info.status == DownloadManager.STATUS_SUCCESSFUL) {
+            removeCallbackListener(id);
             removeUrl(url);
+            removeId(id);
             return false;
         }
         if (info.status == DownloadManager.STATUS_RUNNING) {
@@ -225,42 +230,41 @@ public class FileDownloadManager {
             return;
         }
         boolean shouldRemove = false;
-        synchronized (this) {
-            if (!mListeners.containsKey(info.id)) {
-                return;
+        if (!mListeners.containsKey(info.id)) {
+            return;
+        }
+        List<DownloadListener> listeners = mListeners.get(info.id);
+        if (listeners == null) {
+            return;
+        }
+        for (DownloadListener listener : listeners) {
+            if (listener == null){
+                continue;
             }
-            List<DownloadListener> listeners = mListeners.get(info.id);
-            if (listeners == null) {
-                return;
-            }
-            for (DownloadListener listener : listeners) {
-                if (listener == null){
-                    continue;
-                }
-                switch (info.status) {
-                    case DownloadManager.STATUS_FAILED:
-                        listener.error(info);
-                        shouldRemove = true;
-                        break;
-                    case DownloadManager.STATUS_PAUSED:
-                        listener.pause(info);
-                        break;
-                    case DownloadManager.STATUS_PENDING:
-                        listener.pending(info);
-                        break;
-                    case DownloadManager.STATUS_RUNNING:
-                        listener.progress(info);
-                        break;
-                    case DownloadManager.STATUS_SUCCESSFUL:
-                        listener.completed(info);
-                        shouldRemove = true;
-                        break;
-                }
+            switch (info.status) {
+                case DownloadManager.STATUS_FAILED:
+                    listener.error(info);
+                    shouldRemove = true;
+                    break;
+                case DownloadManager.STATUS_PAUSED:
+                    listener.pause(info);
+                    break;
+                case DownloadManager.STATUS_PENDING:
+                    listener.pending(info);
+                    break;
+                case DownloadManager.STATUS_RUNNING:
+                    listener.progress(info);
+                    break;
+                case DownloadManager.STATUS_SUCCESSFUL:
+                    listener.completed(info);
+                    shouldRemove = true;
+                    break;
             }
         }
         if (shouldRemove) {
             removeCallbackListener(info.id);
             removeUrl(info.url);
+            removeId(id);
         }
     }
 
